@@ -1,4 +1,4 @@
-// Square Checkout API Function using direct HTTP calls
+// Square Checkout API using direct HTTP calls
 
 module.exports = async (req, res) => {
   // Enable CORS
@@ -39,11 +39,11 @@ module.exports = async (req, res) => {
       });
     }
 
-    console.log('Creating payment link for:', { service, amountMoney, customerEmail });
+    console.log('Creating checkout for:', { service, amountMoney, customerEmail });
 
-    // Create payment link using direct HTTP call
-    const paymentLinkData = {
-      idempotency_key: `trinity-${Date.now()}-${Math.random().toString(36).substring(7)}`,
+    // First, create an order
+    const orderData = {
+      idempotency_key: `order-${Date.now()}-${Math.random().toString(36).substring(7)}`,
       order: {
         location_id: locationId,
         line_items: [
@@ -57,44 +57,77 @@ module.exports = async (req, res) => {
           },
         ],
       },
-      checkout_options: {
-        redirect_url: redirectUrl,
-        ask_for_shipping_address: false,
-      },
-      pre_populated_data: {
-        buyer_email: customerEmail,
-      },
     };
 
-    const response = await fetch('https://connect.squareup.com/v2/online-checkout/payment-links', {
+    const orderResponse = await fetch('https://connect.squareup.com/v2/orders', {
       method: 'POST',
       headers: {
         'Square-Version': '2024-01-18',
         'Authorization': `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(paymentLinkData),
+      body: JSON.stringify(orderData),
     });
 
-    const data = await response.json();
+    const orderResult = await orderResponse.json();
 
-    console.log('Square response:', data);
-
-    if (data.errors) {
-      console.error('Square API errors:', data.errors);
+    if (orderResult.errors) {
+      console.error('Order creation errors:', orderResult.errors);
       return res.status(400).json({
-        error: 'Square API error',
-        details: data.errors,
+        error: 'Failed to create order',
+        details: orderResult.errors,
       });
     }
 
-    const checkoutUrl = data.payment_link?.url;
+    const orderId = orderResult.order?.id;
+
+    if (!orderId) {
+      console.error('No order ID in response:', orderResult);
+      return res.status(500).json({
+        error: 'No order ID returned',
+        response: orderResult,
+      });
+    }
+
+    console.log('Order created:', orderId);
+
+    // Now create a checkout with that order
+    const checkoutData = {
+      idempotency_key: `checkout-${Date.now()}-${Math.random().toString(36).substring(7)}`,
+      order_id: orderId,
+      redirect_url: redirectUrl,
+      pre_populate_buyer_email: customerEmail,
+    };
+
+    const checkoutResponse = await fetch(`https://connect.squareup.com/v2/locations/${locationId}/checkouts`, {
+      method: 'POST',
+      headers: {
+        'Square-Version': '2024-01-18',
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(checkoutData),
+    });
+
+    const checkoutResult = await checkoutResponse.json();
+
+    console.log('Checkout response:', checkoutResult);
+
+    if (checkoutResult.errors) {
+      console.error('Checkout creation errors:', checkoutResult.errors);
+      return res.status(400).json({
+        error: 'Failed to create checkout',
+        details: checkoutResult.errors,
+      });
+    }
+
+    const checkoutUrl = checkoutResult.checkout?.checkout_page_url;
 
     if (!checkoutUrl) {
-      console.error('No URL in response:', data);
+      console.error('No checkout URL in response:', checkoutResult);
       return res.status(500).json({
         error: 'No checkout URL returned',
-        response: data,
+        response: checkoutResult,
       });
     }
 
