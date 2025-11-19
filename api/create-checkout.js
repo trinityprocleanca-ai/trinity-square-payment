@@ -61,14 +61,3 @@ module.exports = async (req, res) => {
     });
   }
 };
-Commit the changes
-Step 3: Update package.json in GitHub
-Go to: trinity-square-payment → package.json
-Replace with this:
-{
-  "name": "trinity-square-payment",
-  "version": "1.0.0",
-  "dependencies": {
-    "stripe": "^14.0.0"
-  }
-}
