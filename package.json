@@ -1,0 +1,7 @@
+{
+  "name": "trinity-square-payment",
+  "version": "1.0.0",
+  "dependencies": {
+    "square": "^34.0.0"
+  }
+}
