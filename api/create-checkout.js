@@ -33,63 +33,77 @@ module.exports = async (req, res) => {
       });
     }
 
-    // Convert price to cents (Square uses smallest currency unit)
-    const amountMoney = {
-      amount: Math.round(parseFloat(price) * 100),
-      currency: 'USD',
-    };
+    // Convert price to cents
+    const amountMoney = Math.round(parseFloat(price) * 100);
 
-    console.log('Creating payment link with:', {
-      service,
-      amount: amountMoney.amount,
-      customerEmail
-    });
+    console.log('Creating payment link for:', { service, amountMoney, customerEmail });
 
-    // Create checkout using the correct API structure
-    const { result } = await client.checkoutApi.createPaymentLink({
-      idempotencyKey: `${Date.now()}-${Math.random().toString(36).substring(7)}`,
-      order: {
-        locationId: process.env.SQUARE_LOCATION_ID,
-        lineItems: [
-          {
-            name: service,
-            quantity: '1',
-            basePriceMoney: amountMoney,
-          },
-        ],
-      },
-      checkoutOptions: {
-        redirectUrl: process.env.REDIRECT_URL || 'https://trinityproclean.com/thank-you',
-        askForShippingAddress: false,
-      },
-      prePopulatedData: {
-        buyerEmail: customerEmail,
-      },
-    });
+    // Try using the checkoutApi with proper structure
+    try {
+      const response = await client.checkoutApi.createPaymentLink({
+        idempotencyKey: `trinity-${Date.now()}-${Math.random().toString(36).substring(7)}`,
+        order: {
+          locationId: process.env.SQUARE_LOCATION_ID,
+          lineItems: [
+            {
+              name: service,
+              quantity: '1',
+              basePriceMoney: {
+                amount: BigInt(amountMoney),
+                currency: 'USD',
+              },
+            },
+          ],
+        },
+        checkoutOptions: {
+          redirectUrl: process.env.REDIRECT_URL || 'https://trinityproclean.com/thank-you',
+          askForShippingAddress: false,
+        },
+        prePopulatedData: {
+          buyerEmail: customerEmail,
+        },
+      });
 
-    console.log('Square API response:', result);
+      console.log('Square response:', JSON.stringify(response, null, 2));
 
-    // Check different possible response structures
-    const checkoutUrl = result.paymentLink?.url || result.payment_link?.url || result.url;
+      // Extract URL from response
+      const checkoutUrl = response?.result?.paymentLink?.url || 
+                         response?.result?.payment_link?.url ||
+                         response?.paymentLink?.url ||
+                         response?.payment_link?.url;
 
-    if (!checkoutUrl) {
-      console.error('No checkout URL in response:', result);
+      if (!checkoutUrl) {
+        console.error('No URL found in response:', response);
+        return res.status(500).json({
+          error: 'Square response missing checkout URL',
+          response: response
+        });
+      }
+
+      return res.status(200).json({
+        checkoutUrl: checkoutUrl,
+      });
+
+    } catch (squareError) {
+      console.error('Square API detailed error:', {
+        message: squareError.message,
+        errors: squareError.errors,
+        statusCode: squareError.statusCode,
+        body: squareError.body
+      });
+
       return res.status(500).json({
-        error: 'Square did not return a checkout URL',
-        details: 'Response structure unexpected',
-        response: result
+        error: 'Square API error',
+        message: squareError.message,
+        details: squareError.errors || squareError.body,
       });
     }
 
-    return res.status(200).json({
-      checkoutUrl: checkoutUrl,
-    });
   } catch (error) {
-    console.error('Square API Error:', error);
+    console.error('General error:', error);
     return res.status(500).json({
-      error: 'Failed to create checkout session',
+      error: 'Server error',
       details: error.message,
-      stack: error.stack
     });
   }
 };
