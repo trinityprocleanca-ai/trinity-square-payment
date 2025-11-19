@@ -24,8 +24,13 @@ module.exports = async (req, res) => {
   try {
     const { service, price, customerEmail, customerName } = req.body;
 
-    if (!service || !price) {
-      return res.status(400).json({ error: 'Missing required fields' });
+    // Validate required fields
+    if (!service || !price || !customerEmail || !customerName) {
+      return res.status(400).json({ 
+        error: 'Missing required fields',
+        required: ['service', 'price', 'customerEmail', 'customerName'],
+        received: req.body
+      });
     }
 
     // Convert price to cents (Square uses smallest currency unit)
