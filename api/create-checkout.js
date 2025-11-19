@@ -1,21 +1,7 @@
-// Import Stripe
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
-// Price ID mapping for subscriptions
-const SUBSCRIPTION_PRICE_IDS = {
-  'standard-cleaning-cozy-home': 'price_xxxxx1', // Replace with your actual Price IDs
-  'standard-cleaning-comfortable-home': 'price_xxxxx2',
-  'standard-cleaning-spacious-home': 'price_xxxxx3',
-  'standard-cleaning-large-estate': 'price_xxxxx4',
-  'standard-cleaning-luxury-estate': 'price_xxxxx5',
-  'deep-cleaning-small-home': 'price_xxxxx6',
-  'deep-cleaning-medium-home': 'price_xxxxx7',
-  'deep-cleaning-large-home': 'price_xxxxx8',
-
-};
-
 module.exports = async (req, res) => {
-  // Only accept POST requests
+  // Only allow POST requests
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -23,6 +9,9 @@ module.exports = async (req, res) => {
   try {
     const {
       service,
+      serviceSlug,
+      tier,
+      type,
       price,
       originalPrice,
       addons,
@@ -37,121 +26,108 @@ module.exports = async (req, res) => {
       customerState,
       customerZip,
       specialInstructions,
-      type, // 'one-time' or 'subscription'
-      tier, // e.g., 'cozy-apartment', 'medium-home'
     } = req.body;
 
-    // Get service key from URL parameters
-    const serviceKey = `${service}-${tier}`.toLowerCase().replace(/\s+/g, '-');
+    // Validate required fields
+    if (!service || !price || !customerEmail || !customerName) {
+      return res.status(400).json({ 
+        error: 'Missing required fields',
+        received: req.body 
+      });
+    }
 
-    let sessionConfig = {
-      customer_email: customerEmail,
-      success_url: `${process.env.NEXT_PUBLIC_SITE_URL}/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${process.env.NEXT_PUBLIC_SITE_URL}/checkout`,
-      metadata: {
-        customerName,
-        customerPhone,
-        customerAddress,
-        customerCity,
-        customerState,
-        customerZip,
-        specialInstructions: specialInstructions || '',
-        service,
-        tier,
-        type,
-      },
-    };
+    // Parse price to cents (Stripe uses cents)
+    const priceInCents = Math.round(parseFloat(price) * 100);
 
-    // SUBSCRIPTION MODE
-    if (type === 'subscription') {
-      const priceId = SUBSCRIPTION_PRICE_IDS[serviceKey];
+    // Determine if this is a subscription or one-time payment
+    const isSubscription = type === 'subscription';
+
+    let session;
+
+    if (isSubscription) {
+      // CREATE SUBSCRIPTION CHECKOUT
       
-      if (!priceId) {
-        return res.status(400).json({ 
-          error: 'Invalid subscription configuration',
-          serviceKey 
-        });
-      }
-
-      sessionConfig.mode = 'subscription';
-      sessionConfig.line_items = [
-        {
-          price: priceId,
-          quantity: 1,
-        }
-      ];
-
-      // Add subscription-specific settings
-      sessionConfig.subscription_data = {
-        metadata: {
-          service,
-          tier,
-          customerName,
-          customerPhone,
-        },
-      };
-
-      // Handle add-ons for subscriptions
-      if (addons && addons.length > 0) {
-        // Create one-time line items for add-ons (they'll recur with subscription)
-        addons.forEach(addon => {
-          sessionConfig.line_items.push({
-            price_data: {
-              currency: 'usd',
-              product_data: {
-                name: `Add-on: ${addon.name}`,
-                description: `Recurring add-on service (${addon.quantity}x)`,
-              },
-              unit_amount: Math.round(addon.price * 100),
-              recurring: {
-                interval: 'month',
-              },
-            },
-            quantity: addon.quantity,
-          });
-        });
-      }
-
-    } 
-    // ONE-TIME PAYMENT MODE
-    else {
-      sessionConfig.mode = 'payment';
-      
-      const finalAmount = parseFloat(price) * 100; // Convert to cents
-
-      sessionConfig.line_items = [
+      // Build line items for subscription
+      const lineItems = [
         {
           price_data: {
             currency: 'usd',
             product_data: {
               name: service,
-              description: `One-time cleaning service for ${tier}`,
+              description: specialInstructions || 'Monthly recurring cleaning service',
             },
-            unit_amount: Math.round(finalAmount),
+            recurring: {
+              interval: 'month',
+            },
+            unit_amount: priceInCents,
           },
           quantity: 1,
-        }
+        },
       ];
 
-      // Add one-time add-ons
-      if (addons && addons.length > 0) {
-        addons.forEach(addon => {
-          sessionConfig.line_items.push({
-            price_data: {
-              currency: 'usd',
-              product_data: {
-                name: `Add-on: ${addon.name}`,
-              },
-              unit_amount: Math.round(addon.price * 100),
+      // Create Stripe Checkout Session for Subscription
+      session = await stripe.checkout.sessions.create({
+        mode: 'subscription',
+        line_items: lineItems,
+        customer_email: customerEmail,
+        success_url: 'https://trinityproclean.com/thank-you?session_id={CHECKOUT_SESSION_ID}',
+        cancel_url: 'https://trinityproclean.com/checkout',
+        metadata: {
+          service,
+          serviceSlug,
+          tier,
+          type: 'subscription',
+          customerName,
+          customerPhone,
+          customerAddress,
+          customerCity,
+          customerState,
+          customerZip,
+          specialInstructions,
+          addons: JSON.stringify(addons || []),
+          discountCode: discountCode || '',
+        },
+      });
+    } else {
+      // CREATE ONE-TIME PAYMENT CHECKOUT
+      
+      const lineItems = [
+        {
+          price_data: {
+            currency: 'usd',
+            product_data: {
+              name: service,
+              description: specialInstructions || 'One-time cleaning service',
             },
-            quantity: addon.quantity,
-          });
-        });
-      }
-    }
+            unit_amount: priceInCents,
+          },
+          quantity: 1,
+        },
+      ];
 
-    // Create the checkout session
-    const session = await stripe.checkout.sessions.create(sessionConfig);
+      session = await stripe.checkout.sessions.create({
+        mode: 'payment',
+        line_items: lineItems,
+        customer_email: customerEmail,
+        success_url: 'https://trinityproclean.com/thank-you?session_id={CHECKOUT_SESSION_ID}',
+        cancel_url: 'https://trinityproclean.com/checkout',
+        metadata: {
+          service,
+          serviceSlug,
+          tier,
+          type: 'one-time',
+          customerName,
+          customerPhone,
+          customerAddress,
+          customerCity,
+          customerState,
+          customerZip,
+          specialInstructions,
+          addons: JSON.stringify(addons || []),
+          discountCode: discountCode || '',
+        },
+      });
+    }
 
     // Return the checkout URL
     return res.status(200).json({ 
@@ -160,10 +136,10 @@ module.exports = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Stripe checkout error:', error);
+    console.error('Stripe error:', error);
     return res.status(500).json({ 
       error: error.message,
-      details: error 
+      details: error.type 
     });
   }
 };
