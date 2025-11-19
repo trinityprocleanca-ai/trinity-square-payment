@@ -39,8 +39,15 @@ module.exports = async (req, res) => {
       currency: 'USD',
     };
 
-    // Create checkout
+    console.log('Creating payment link with:', {
+      service,
+      amount: amountMoney.amount,
+      customerEmail
+    });
+
+    // Create checkout using the correct API structure
     const { result } = await client.checkoutApi.createPaymentLink({
+      idempotencyKey: `${Date.now()}-${Math.random().toString(36).substring(7)}`,
       order: {
         locationId: process.env.SQUARE_LOCATION_ID,
         lineItems: [
@@ -60,14 +67,29 @@ module.exports = async (req, res) => {
       },
     });
 
+    console.log('Square API response:', result);
+
+    // Check different possible response structures
+    const checkoutUrl = result.paymentLink?.url || result.payment_link?.url || result.url;
+
+    if (!checkoutUrl) {
+      console.error('No checkout URL in response:', result);
+      return res.status(500).json({
+        error: 'Square did not return a checkout URL',
+        details: 'Response structure unexpected',
+        response: result
+      });
+    }
+
     return res.status(200).json({
-      checkoutUrl: result.paymentLink.url,
+      checkoutUrl: checkoutUrl,
     });
   } catch (error) {
     console.error('Square API Error:', error);
     return res.status(500).json({
       error: 'Failed to create checkout session',
       details: error.message,
+      stack: error.stack
     });
   }
 };
