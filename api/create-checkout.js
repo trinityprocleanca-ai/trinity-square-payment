@@ -1,11 +1,4 @@
-// Square Checkout API Function
-const { Client, Environment } = require('square');
-
-// Initialize Square client
-const client = new Client({
-  accessToken: process.env.SQUARE_ACCESS_TOKEN,
-  environment: Environment.Production,
-});
+// Square Checkout API Function using direct HTTP calls
 
 module.exports = async (req, res) => {
   // Enable CORS
@@ -36,71 +29,81 @@ module.exports = async (req, res) => {
     // Convert price to cents
     const amountMoney = Math.round(parseFloat(price) * 100);
 
-    console.log('Creating payment link for:', { service, amountMoney, customerEmail });
+    const accessToken = process.env.SQUARE_ACCESS_TOKEN;
+    const locationId = process.env.SQUARE_LOCATION_ID;
+    const redirectUrl = process.env.REDIRECT_URL || 'https://trinityproclean.com/thank-you';
 
-    // Try using the checkoutApi with proper structure
-    try {
-      const response = await client.checkoutApi.createPaymentLink({
-        idempotencyKey: `trinity-${Date.now()}-${Math.random().toString(36).substring(7)}`,
-        order: {
-          locationId: process.env.SQUARE_LOCATION_ID,
-          lineItems: [
-            {
-              name: service,
-              quantity: '1',
-              basePriceMoney: {
-                amount: BigInt(amountMoney),
-                currency: 'USD',
-              },
-            },
-          ],
-        },
-        checkoutOptions: {
-          redirectUrl: process.env.REDIRECT_URL || 'https://trinityproclean.com/thank-you',
-          askForShippingAddress: false,
-        },
-        prePopulatedData: {
-          buyerEmail: customerEmail,
-        },
-      });
-
-      console.log('Square response:', JSON.stringify(response, null, 2));
-
-      // Extract URL from response
-      const checkoutUrl = response?.result?.paymentLink?.url || 
-                         response?.result?.payment_link?.url ||
-                         response?.paymentLink?.url ||
-                         response?.payment_link?.url;
-
-      if (!checkoutUrl) {
-        console.error('No URL found in response:', response);
-        return res.status(500).json({
-          error: 'Square response missing checkout URL',
-          response: response
-        });
-      }
-
-      return res.status(200).json({
-        checkoutUrl: checkoutUrl,
-      });
-
-    } catch (squareError) {
-      console.error('Square API detailed error:', {
-        message: squareError.message,
-        errors: squareError.errors,
-        statusCode: squareError.statusCode,
-        body: squareError.body
-      });
-
-      return res.status(500).json({
-        error: 'Square API error',
-        message: squareError.message,
-        details: squareError.errors || squareError.body,
+    if (!accessToken || !locationId) {
+      return res.status(500).json({ 
+        error: 'Missing Square credentials' 
       });
     }
 
+    console.log('Creating payment link for:', { service, amountMoney, customerEmail });
+
+    // Create payment link using direct HTTP call
+    const paymentLinkData = {
+      idempotency_key: `trinity-${Date.now()}-${Math.random().toString(36).substring(7)}`,
+      order: {
+        location_id: locationId,
+        line_items: [
+          {
+            name: service,
+            quantity: '1',
+            base_price_money: {
+              amount: amountMoney,
+              currency: 'USD',
+            },
+          },
+        ],
+      },
+      checkout_options: {
+        redirect_url: redirectUrl,
+        ask_for_shipping_address: false,
+      },
+      pre_populated_data: {
+        buyer_email: customerEmail,
+      },
+    };
+
+    const response = await fetch('https://connect.squareup.com/v2/online-checkout/payment-links', {
+      method: 'POST',
+      headers: {
+        'Square-Version': '2024-01-18',
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(paymentLinkData),
+    });
+
+    const data = await response.json();
+
+    console.log('Square response:', data);
+
+    if (data.errors) {
+      console.error('Square API errors:', data.errors);
+      return res.status(400).json({
+        error: 'Square API error',
+        details: data.errors,
+      });
+    }
+
+    const checkoutUrl = data.payment_link?.url;
+
+    if (!checkoutUrl) {
+      console.error('No URL in response:', data);
+      return res.status(500).json({
+        error: 'No checkout URL returned',
+        response: data,
+      });
+    }
+
+    return res.status(200).json({
+      checkoutUrl: checkoutUrl,
+    });
+
   } catch (error) {
-    console.error('General error:', error);
+    console.error('Server error:', error);
     return res.status(500).json({
       error: 'Server error',
       details: error.message,
