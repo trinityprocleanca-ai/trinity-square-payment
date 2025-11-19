@@ -1,4 +1,5 @@
-// Square Checkout API using direct HTTP calls
+// Stripe Checkout API
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
 module.exports = async (req, res) => {
   // Enable CORS
@@ -18,128 +19,56 @@ module.exports = async (req, res) => {
     const { service, price, customerEmail, customerName } = req.body;
 
     // Validate required fields
-    if (!service || !price || !customerEmail || !customerName) {
+    if (!service || !price || !customerEmail) {
       return res.status(400).json({ 
-        error: 'Missing required fields',
-        required: ['service', 'price', 'customerEmail', 'customerName'],
-        received: req.body
+        error: 'Missing required fields'
       });
     }
 
     // Convert price to cents
-    const amountMoney = Math.round(parseFloat(price) * 100);
+    const amountInCents = Math.round(parseFloat(price) * 100);
 
-    const accessToken = process.env.SQUARE_ACCESS_TOKEN;
-    const locationId = process.env.SQUARE_LOCATION_ID;
-    const redirectUrl = process.env.REDIRECT_URL || 'https://trinityproclean.com/thank-you';
-
-    if (!accessToken || !locationId) {
-      return res.status(500).json({ 
-        error: 'Missing Square credentials' 
-      });
-    }
-
-    console.log('Creating checkout for:', { service, amountMoney, customerEmail });
-
-    // First, create an order
-    const orderData = {
-      idempotency_key: `order-${Date.now()}-${Math.random().toString(36).substring(7)}`,
-      order: {
-        location_id: locationId,
-        line_items: [
-          {
-            name: service,
-            quantity: '1',
-            base_price_money: {
-              amount: amountMoney,
-              currency: 'USD',
+    // Create Stripe Checkout Session
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ['card'],
+      line_items: [
+        {
+          price_data: {
+            currency: 'usd',
+            product_data: {
+              name: service,
             },
+            unit_amount: amountInCents,
           },
-        ],
-      },
-    };
-
-    const orderResponse = await fetch('https://connect.squareup.com/v2/orders', {
-      method: 'POST',
-      headers: {
-        'Square-Version': '2024-01-18',
-        'Authorization': `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(orderData),
+          quantity: 1,
+        },
+      ],
+      mode: 'payment',
+      success_url: process.env.REDIRECT_URL || 'https://trinityproclean.com/thank-you',
+      cancel_url: 'https://trinityproclean.com/checkout',
+      customer_email: customerEmail,
     });
-
-    const orderResult = await orderResponse.json();
-
-    if (orderResult.errors) {
-      console.error('Order creation errors:', orderResult.errors);
-      return res.status(400).json({
-        error: 'Failed to create order',
-        details: orderResult.errors,
-      });
-    }
-
-    const orderId = orderResult.order?.id;
-
-    if (!orderId) {
-      console.error('No order ID in response:', orderResult);
-      return res.status(500).json({
-        error: 'No order ID returned',
-        response: orderResult,
-      });
-    }
-
-    console.log('Order created:', orderId);
-
-    // Now create a checkout with that order
-    const checkoutData = {
-      idempotency_key: `checkout-${Date.now()}-${Math.random().toString(36).substring(7)}`,
-      order_id: orderId,
-      redirect_url: redirectUrl,
-      pre_populate_buyer_email: customerEmail,
-    };
-
-    const checkoutResponse = await fetch(`https://connect.squareup.com/v2/locations/${locationId}/checkouts`, {
-      method: 'POST',
-      headers: {
-        'Square-Version': '2024-01-18',
-        'Authorization': `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(checkoutData),
-    });
-
-    const checkoutResult = await checkoutResponse.json();
-
-    console.log('Checkout response:', checkoutResult);
-
-    if (checkoutResult.errors) {
-      console.error('Checkout creation errors:', checkoutResult.errors);
-      return res.status(400).json({
-        error: 'Failed to create checkout',
-        details: checkoutResult.errors,
-      });
-    }
-
-    const checkoutUrl = checkoutResult.checkout?.checkout_page_url;
-
-    if (!checkoutUrl) {
-      console.error('No checkout URL in response:', checkoutResult);
-      return res.status(500).json({
-        error: 'No checkout URL returned',
-        response: checkoutResult,
-      });
-    }
 
     return res.status(200).json({
-      checkoutUrl: checkoutUrl,
+      checkoutUrl: session.url,
     });
 
   } catch (error) {
-    console.error('Server error:', error);
+    console.error('Stripe error:', error);
     return res.status(500).json({
-      error: 'Server error',
+      error: 'Failed to create checkout session',
       details: error.message,
     });
   }
 };
+Commit the changes
+Step 3: Update package.json in GitHub
+Go to: trinity-square-payment → package.json
+Replace with this:
+{
+  "name": "trinity-square-payment",
+  "version": "1.0.0",
+  "dependencies": {
+    "stripe": "^14.0.0"
+  }
+}
